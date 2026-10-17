@@ -104,6 +104,7 @@ export default function SignupPage() {
       });
 
       if (signUpError) {
+        console.error('Supabase sign-up error:', signUpError);
         setErrors({ general: getAuthErrorMessage(signUpError) });
         setIsSubmitting(false);
         return;
@@ -120,6 +121,7 @@ export default function SignupPage() {
       });
       setIsSubmitting(false);
     } catch (err: unknown) {
+      console.error('Signup submission caught error:', err);
       setErrors({ general: getAuthErrorMessage(err) });
       setIsSubmitting(false);
     }

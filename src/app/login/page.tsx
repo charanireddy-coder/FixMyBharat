@@ -70,6 +70,7 @@ function LoginForm() {
       });
 
       if (signInError) {
+        console.error('Supabase sign-in error:', signInError);
         setErrors({ general: getAuthErrorMessage(signInError) });
         setIsSubmitting(false);
         return;
@@ -84,6 +85,7 @@ function LoginForm() {
 
       router.push(targetDestination);
     } catch (err: unknown) {
+      console.error('Login submission caught error:', err);
       setErrors({ general: getAuthErrorMessage(err) });
       setIsSubmitting(false);
     }

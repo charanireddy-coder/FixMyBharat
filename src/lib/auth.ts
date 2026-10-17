@@ -91,8 +91,16 @@ export function getAuthErrorMessage(error: unknown): string {
   let rawMessage = '';
   if (error instanceof Error) {
     rawMessage = error.message;
-  } else if (typeof error === 'object' && error !== null && 'message' in error) {
-    rawMessage = String((error as { message: unknown }).message);
+  } else if (typeof error === 'object' && error !== null) {
+    const errObj = error as Record<string, unknown>;
+    rawMessage = String(
+      errObj.message ||
+      errObj.error_description ||
+      errObj.msg ||
+      errObj.details ||
+      errObj.error ||
+      ''
+    );
   } else if (typeof error === 'string') {
     rawMessage = error;
   }
@@ -102,7 +110,8 @@ export function getAuthErrorMessage(error: unknown): string {
   if (
     message.includes('invalid login credentials') ||
     message.includes('invalid email or password') ||
-    message.includes('invalid_grant')
+    message.includes('invalid_grant') ||
+    message.includes('invalid_credentials')
   ) {
     return 'Email or password is incorrect.';
   }
@@ -130,7 +139,7 @@ export function getAuthErrorMessage(error: unknown): string {
     message.includes('timeout') ||
     message.includes('connection refused')
   ) {
-    return "We couldn't complete the request. Please try again.";
+    return 'Network error: Unable to reach authentication server. Please check your internet connection.';
   }
 
   if (
