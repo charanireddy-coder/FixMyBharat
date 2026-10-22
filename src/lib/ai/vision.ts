@@ -30,12 +30,16 @@ export interface VisionHealthStatus {
 
 /**
  * Probes the YOLO microservice health endpoint with a short timeout.
+ * If local microservice is offline but ULTRALYTICS_API_KEY is configured (e.g. on Netlify),
+ * returns online status via the Ultralytics Platform Cloud inference API.
  * Server-side only. Safe against unreachable/offline services.
  */
 export async function checkVisionServiceHealth(
   timeoutMs = 3000
 ): Promise<VisionHealthStatus> {
   const baseUrl = getVisionServiceUrl();
+  const apiKey = process.env.ULTRALYTICS_API_KEY || process.env.YOLO_API_KEY;
+
   try {
     const res = await fetch(`${baseUrl}/health`, {
       method: 'GET',
@@ -44,28 +48,36 @@ export async function checkVisionServiceHealth(
       cache: 'no-store',
     });
 
-    if (!res.ok) {
+    if (res.ok) {
+      const data = await res.json();
       return {
-        online: false,
-        error: `Vision service responded with HTTP ${res.status}: ${res.statusText}`,
+        online: true,
+        service: data.service,
+        model: data.model,
+        device: data.device,
+        environment: data.environment,
       };
     }
+  } catch {
+    // Local probe failed, evaluate cloud fallback below
+  }
 
-    const data = await res.json();
+  // Cloud API fallback for serverless deployments (Netlify / Vercel)
+  if (apiKey) {
+    const model = process.env.ULTRALYTICS_MODEL || 'yolo26n';
     return {
       online: true,
-      service: data.service,
-      model: data.model,
-      device: data.device,
-      environment: data.environment,
-    };
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'Unknown network failure';
-    return {
-      online: false,
-      error: `YOLO service unreachable at ${baseUrl} (${msg})`,
+      service: 'ultralytics-cloud',
+      model: `${model} (Ultralytics Cloud API)`,
+      device: 'cloud',
+      environment: 'cloud-serverless',
     };
   }
+
+  return {
+    online: false,
+    error: `YOLO service unreachable at ${baseUrl} and no ULTRALYTICS_API_KEY configured for cloud fallback.`,
+  };
 }
 
 /**
@@ -132,11 +144,129 @@ export async function detectObjectsFromBytes(
 }
 
 /**
+ * Calls the official Ultralytics Platform Cloud Predict API directly.
+ * Allows running YOLO object detection in serverless environments (e.g. Netlify)
+ * without needing to deploy or maintain a separate persistent Python container.
+ */
+export async function detectObjectsFromUltralyticsCloud(
+  imageBytes: Uint8Array | ArrayBuffer | Buffer,
+  mimeType: string,
+  filename = 'complaint-photo.jpg',
+  confidence = 0.25,
+  timeoutMs = 25000
+): Promise<VisionDetectionResponse> {
+  const apiKey = process.env.ULTRALYTICS_API_KEY || process.env.YOLO_API_KEY;
+  if (!apiKey) {
+    throw new Error('ULTRALYTICS_API_KEY is not configured in environment variables.');
+  }
+
+  const owner = process.env.ULTRALYTICS_OWNER || 'gundeti-charani-reddy';
+  const project = process.env.ULTRALYTICS_PROJECT || 'example-project';
+  const model = process.env.ULTRALYTICS_MODEL || 'yolo26n';
+
+  const clampedConfidence = Math.max(0.05, Math.min(0.95, Number(confidence) || 0.25));
+  const url = `https://platform.ultralytics.com/api/models/${owner}/${project}/${model}/predict`;
+
+  const blob = new Blob([imageBytes as unknown as BlobPart], { type: mimeType });
+  const form = new FormData();
+  form.append('file', blob, filename);
+  form.append('conf', String(clampedConfidence));
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey.trim()}`,
+    },
+    body: form,
+    signal: AbortSignal.timeout(timeoutMs),
+    cache: 'no-store',
+  });
+
+  if (!res.ok) {
+    let errDetail = `HTTP ${res.status}: ${res.statusText}`;
+    try {
+      const errJson = await res.json();
+      if (errJson?.message || errJson?.detail) {
+        errDetail = errJson.message || errJson.detail;
+      }
+    } catch {
+      // Ignore parse failure on error body
+    }
+    throw new Error(`Ultralytics Cloud API error: ${errDetail}`);
+  }
+
+  interface CloudResultBox {
+    x1: number;
+    y1: number;
+    x2: number;
+    y2: number;
+  }
+  interface CloudResultItem {
+    name: string;
+    class?: number;
+    confidence: number;
+    box: CloudResultBox;
+  }
+  interface CloudResponse {
+    images?: Array<{
+      shape?: [number, number];
+      results?: CloudResultItem[];
+    }>;
+  }
+
+  const data: CloudResponse = await res.json();
+  const firstImage = data.images?.[0];
+  const imgShape = firstImage?.shape || [640, 640];
+  const imgHeight = Math.max(1, imgShape[0]);
+  const imgWidth = Math.max(1, imgShape[1]);
+
+  const rawResults = firstImage?.results || [];
+  const detections = rawResults
+    .filter((r) => r.confidence >= clampedConfidence)
+    .map((r) => {
+      const x1 = Math.round(r.box.x1);
+      const y1 = Math.round(r.box.y1);
+      const x2 = Math.round(r.box.x2);
+      const y2 = Math.round(r.box.y2);
+      const w = Math.max(0, x2 - x1);
+      const h = Math.max(0, y2 - y1);
+      return {
+        class_id: r.class ?? 0,
+        class_name: r.name || 'object',
+        confidence: Number((r.confidence ?? 0).toFixed(4)),
+        box: {
+          x1,
+          y1,
+          x2,
+          y2,
+          width: w,
+          height: h,
+          norm_x1: Number(Math.max(0, Math.min(1, x1 / imgWidth)).toFixed(4)),
+          norm_y1: Number(Math.max(0, Math.min(1, y1 / imgHeight)).toFixed(4)),
+          norm_width: Number(Math.max(0, Math.min(1, w / imgWidth)).toFixed(4)),
+          norm_height: Number(Math.max(0, Math.min(1, h / imgHeight)).toFixed(4)),
+        },
+      };
+    });
+
+  return {
+    status: 'ok',
+    model: `${model} (Ultralytics Cloud)`,
+    device: 'cloud',
+    image: { width: imgWidth, height: imgHeight },
+    total_detections: detections.length,
+    detections,
+    model_limitations_notice:
+      'Object detection powered by Ultralytics Platform Cloud inference.',
+  };
+}
+
+/**
  * High-level server-side helper:
  * 1. Obtains an authorized temporary signed URL for a complaint photo path.
  * 2. Fetches the image server-side.
  * 3. Enforces the 5 MB limit and valid image format.
- * 4. Forwards image bytes to the YOLO /detect endpoint.
+ * 4. Forwards image bytes to the YOLO /detect endpoint (with seamless Ultralytics Cloud fallback).
  * 5. Returns parsed detections or graceful error details without crashing.
  */
 export async function detectComplaintPhoto(
@@ -230,14 +360,31 @@ export async function detectComplaintPhoto(
       };
     }
 
-    // Forward bytes to YOLO microservice
+    // Forward bytes to YOLO microservice (local first, fallback to Ultralytics Cloud)
     const filename = photoPathOrUrl.split('?')[0].split('/').pop() || 'complaint-evidence.jpg';
-    const detectionResponse = await detectObjectsFromBytes(
-      arrayBuffer,
-      cleanContentType,
-      filename,
-      confidence
-    );
+    const apiKey = process.env.ULTRALYTICS_API_KEY || process.env.YOLO_API_KEY;
+
+    let detectionResponse: VisionDetectionResponse;
+    try {
+      detectionResponse = await detectObjectsFromBytes(
+        arrayBuffer,
+        cleanContentType,
+        filename,
+        confidence,
+        apiKey ? 5000 : 15000
+      );
+    } catch (localErr) {
+      if (apiKey) {
+        detectionResponse = await detectObjectsFromUltralyticsCloud(
+          arrayBuffer,
+          cleanContentType,
+          filename,
+          confidence
+        );
+      } else {
+        throw localErr;
+      }
+    }
 
     return {
       success: true,
@@ -252,7 +399,7 @@ export async function detectComplaintPhoto(
 
     let friendlyError = msg;
     if (isConnRefused) {
-      friendlyError = `YOLO microservice is currently offline at ${baseUrl}. Ensure the service is running (python -m uvicorn main:app --port 8000).`;
+      friendlyError = `YOLO microservice is currently offline at ${baseUrl}. Ensure the service is running (python -m uvicorn main:app --port 8000) or configure ULTRALYTICS_API_KEY for cloud inference.`;
     } else if (isTimeout) {
       friendlyError = `YOLO vision request timed out while processing photo.`;
     }

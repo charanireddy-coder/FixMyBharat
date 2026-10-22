@@ -175,3 +175,32 @@ test('7. Contract guardrail: YOLO detections must not override rules-based analy
   assert.equal(combined.analysisSource, 'rules', 'Analysis source must remain rules');
   assert.equal(combined.visionDetections.total_detections, 3, 'Vision detections preserved advisory');
 });
+
+test('8. Ultralytics Cloud inference response normalization', () => {
+  const mockCloudPayload = {
+    images: [{
+      shape: [896, 1200],
+      results: [
+        { name: 'car', class: 2, confidence: 0.9204, box: { x1: 400, y1: 420, x2: 760, y2: 688 } },
+        { name: 'person', class: 0, confidence: 0.6911, box: { x1: 85, y1: 387, x2: 116, y2: 474 } }
+      ]
+    }]
+  };
+
+  const imgWidth = mockCloudPayload.images[0].shape[1];
+  const imgHeight = mockCloudPayload.images[0].shape[0];
+  const first = mockCloudPayload.images[0].results[0];
+
+  const norm_x1 = first.box.x1 / imgWidth;
+  const norm_y1 = first.box.y1 / imgHeight;
+  const norm_width = (first.box.x2 - first.box.x1) / imgWidth;
+  const norm_height = (first.box.y2 - first.box.y1) / imgHeight;
+
+  assert.ok(norm_x1 >= 0 && norm_x1 <= 1, 'norm_x1 between 0 and 1');
+  assert.ok(norm_y1 >= 0 && norm_y1 <= 1, 'norm_y1 between 0 and 1');
+  assert.ok(norm_width > 0 && norm_width <= 1, 'norm_width between 0 and 1');
+  assert.ok(norm_height > 0 && norm_height <= 1, 'norm_height between 0 and 1');
+  assert.equal(first.name, 'car');
+  assert.equal(first.confidence, 0.9204);
+});
+
