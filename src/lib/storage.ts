@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/client';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 export const COMPLAINT_PHOTOS_BUCKET = 'complaint-photos';
 export const MAX_PHOTO_SIZE_BYTES = 5 * 1024 * 1024; // 5 MB
@@ -74,16 +75,17 @@ export async function uploadComplaintPhoto(
 
 /**
  * Generates a signed URL for a photo in the private complaint-photos bucket.
- * Safe for authenticated citizen/official viewing.
+ * Safe for authenticated citizen/official viewing. Supports both client and server contexts.
  */
 export async function getSignedPhotoUrl(
   path: string | null,
-  expiresIn = 3600
+  expiresIn = 3600,
+  supabaseClient?: SupabaseClient
 ): Promise<string | null> {
   if (!path) return null;
 
   try {
-    const supabase = createClient();
+    const supabase = supabaseClient || createClient();
     const { data, error } = await supabase.storage
       .from(COMPLAINT_PHOTOS_BUCKET)
       .createSignedUrl(path, expiresIn);

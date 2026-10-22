@@ -43,4 +43,11 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-.vercel
+# python & cv-service
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.pt
+*.onnx
+runs/

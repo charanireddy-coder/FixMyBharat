@@ -91,6 +91,46 @@ export interface AIAnalysis {
   analyzed_at: string;
 }
 
+// ----------------------------------------------------
+// YOLO COMPUTER VISION MICROSERVICE TYPES
+// ----------------------------------------------------
+
+export interface VisionBoundingBox {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  width: number;
+  height: number;
+  norm_x1: number;
+  norm_y1: number;
+  norm_width: number;
+  norm_height: number;
+}
+
+export interface VisionDetection {
+  class_id: number;
+  class_name: string;
+  confidence: number;
+  box: VisionBoundingBox;
+}
+
+export interface VisionImageDimensions {
+  width: number;
+  height: number;
+}
+
+export interface VisionDetectionResponse {
+  status: string;
+  model: string;
+  device: string;
+  image: VisionImageDimensions;
+  total_detections: number;
+  detections: VisionDetection[];
+  model_limitations_notice?: string;
+}
+
+
 export interface RelatedReport {
   id: string;
   complaint_id: string;

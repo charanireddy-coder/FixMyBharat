@@ -17,7 +17,12 @@ import {
   History,
   Building2,
   ArrowRight,
+  Eye,
+  EyeOff,
+  RefreshCw,
+  ScanLine,
 } from 'lucide-react';
+import { runVisionDetectionAction } from '@/app/actions/ai';
 import { CitizenNav } from '@/components/layout/CitizenNav';
 import { Container } from '@/components/ui/Container';
 import { Button } from '@/components/ui/Button';
@@ -27,10 +32,16 @@ import { SeverityBadge } from '@/components/ui/SeverityBadge';
 import { LoadingState } from '@/components/ui/LoadingState';
 import { useAuth } from '@/components/providers/AuthProvider';
 import { createClient } from '@/lib/supabase/client';
-import { Complaint, ComplaintStatus, ComplaintUpdate } from '@/types';
+import {
+  Complaint,
+  ComplaintStatus,
+  ComplaintUpdate,
+  VisionDetectionResponse,
+} from '@/types';
 import { getCategoryLabel, formatComplaintDate } from '@/lib/complaints';
 import { getSignedPhotoUrl } from '@/lib/storage';
 import { cn } from '@/lib/utils';
+
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -49,6 +60,13 @@ function CitizenReportDetailContent({ params }: PageProps) {
   const [signedPhotoUrl, setSignedPhotoUrl] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [errorStatus, setErrorStatus] = useState<'not_found' | 'unauthorized' | null>(null);
+
+  // YOLO Vision Detection state
+  const [visionDetections, setVisionDetections] = useState<VisionDetectionResponse | null>(null);
+  const [isScanningVision, setIsScanningVision] = useState(false);
+  const [visionError, setVisionError] = useState<string | null>(null);
+  const [showBoundingBoxes, setShowBoundingBoxes] = useState(true);
+
 
   // Auth protection
   useEffect(() => {
@@ -114,11 +132,33 @@ function CitizenReportDetailContent({ params }: PageProps) {
             setUpdates((updatesData as ComplaintUpdate[]) || []);
           }
 
-          // Fetch signed URL for image if present
+          // Fetch signed URL for image if present and scan with YOLO
           if (item.image_url) {
             const photoUrl = await getSignedPhotoUrl(item.image_url);
             if (isMounted) {
               setSignedPhotoUrl(photoUrl);
+            }
+
+            // Non-blocking YOLO vision inference
+            try {
+              if (isMounted) setIsScanningVision(true);
+              const visionRes = await runVisionDetectionAction(item.id, 0.25, photoUrl);
+              if (isMounted) {
+                if (visionRes.success && visionRes.data) {
+                  setVisionDetections(visionRes.data);
+                  setVisionError(null);
+                } else if (visionRes.error) {
+                  setVisionError(visionRes.error);
+                }
+              }
+            } catch {
+              if (isMounted) {
+                setVisionError('Vision microservice is currently unreachable.');
+              }
+            } finally {
+              if (isMounted) {
+                setIsScanningVision(false);
+              }
             }
           }
         } catch {
@@ -140,6 +180,28 @@ function CitizenReportDetailContent({ params }: PageProps) {
       isMounted = false;
     };
   }, [user, role, complaintId]);
+
+  // Handle on-demand/re-scan by citizen
+  const handleRunVisionScan = async () => {
+    if (!complaint || !complaint.image_url) return;
+    setIsScanningVision(true);
+    setVisionError(null);
+
+    try {
+      const res = await runVisionDetectionAction(complaint.id, 0.25, signedPhotoUrl);
+      if (res.success && res.data) {
+        setVisionDetections(res.data);
+        setVisionError(null);
+      } else {
+        setVisionError(res.error || 'Failed to detect objects in complaint photo.');
+      }
+    } catch {
+      setVisionError('Vision microservice is currently unreachable.');
+    } finally {
+      setIsScanningVision(false);
+    }
+  };
+
 
   if (authLoading || isLoading) {
     return (
@@ -380,20 +442,76 @@ function CitizenReportDetailContent({ params }: PageProps) {
                   </div>
                 </div>
 
-                {/* Right Column: Photo Evidence */}
-                <div className="lg:col-span-5 space-y-2">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">
-                    Uploaded Photo Evidence
-                  </h3>
+                {/* Right Column: Photo Evidence & YOLO Object Detections */}
+                <div className="lg:col-span-5 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                      Uploaded Photo Evidence
+                    </h3>
 
-                  <div className="rounded-xl border border-slate-200 overflow-hidden bg-slate-100 flex items-center justify-center min-h-[240px]">
+                    {signedPhotoUrl && (
+                      <div className="flex items-center gap-1.5">
+                        {visionDetections && visionDetections.detections.length > 0 && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setShowBoundingBoxes(!showBoundingBoxes)}
+                            className="text-xs h-6 px-2 text-slate-600 hover:text-navy-950"
+                            leftIcon={showBoundingBoxes ? <EyeOff size={11} /> : <Eye size={11} />}
+                          >
+                            {showBoundingBoxes ? 'Hide Boxes' : 'Show Boxes'}
+                          </Button>
+                        )}
+
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={handleRunVisionScan}
+                          disabled={isScanningVision}
+                          className="text-xs h-6 px-2"
+                          leftIcon={<RefreshCw size={11} className={isScanningVision ? 'animate-spin' : ''} />}
+                        >
+                          {isScanningVision ? 'Scanning...' : visionDetections ? 'Re-scan YOLO' : 'Scan with YOLO'}
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="rounded-xl border border-slate-200 overflow-hidden bg-black/60 flex items-center justify-center p-2 min-h-[220px]">
                     {signedPhotoUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={signedPhotoUrl}
-                        alt={complaint.title}
-                        className="w-full h-auto max-h-[340px] object-cover"
-                      />
+                      <div className="relative inline-block max-w-full">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={signedPhotoUrl}
+                          alt={complaint.title}
+                          className="block max-h-[340px] w-auto max-w-full rounded-lg object-contain select-none"
+                        />
+
+                        {/* Bounding Box Overlay */}
+                        {showBoundingBoxes && visionDetections?.detections && visionDetections.detections.length > 0 && (
+                          <div className="absolute inset-0 pointer-events-none">
+                            {visionDetections.detections.map((det, idx) => {
+                              const { norm_x1, norm_y1, norm_width, norm_height } = det.box;
+                              return (
+                                <div
+                                  key={idx}
+                                  className="absolute border-2 border-amber-400 bg-amber-400/15 rounded-sm transition-all"
+                                  style={{
+                                    left: `${norm_x1 * 100}%`,
+                                    top: `${norm_y1 * 100}%`,
+                                    width: `${norm_width * 100}%`,
+                                    height: `${norm_height * 100}%`,
+                                  }}
+                                >
+                                  <span className="absolute -top-5 left-0 px-1.5 py-0.5 rounded text-[10px] font-bold bg-navy-950/90 text-amber-300 border border-amber-400/60 shadow whitespace-nowrap">
+                                    {det.class_name} {Math.round(det.confidence * 100)}%
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
                     ) : (
                       <div className="text-center p-8 space-y-2 text-slate-400">
                         <ImageIcon size={32} className="mx-auto text-slate-300" />
@@ -401,7 +519,101 @@ function CitizenReportDetailContent({ params }: PageProps) {
                       </div>
                     )}
                   </div>
+
+                  {/* YOLO Object Detections Panel */}
+                  {signedPhotoUrl && (
+                    <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-2.5">
+                      <div className="flex items-center justify-between border-b border-slate-200/80 pb-2">
+                        <div className="flex items-center gap-1.5">
+                          <ScanLine size={14} className="text-civic-600" />
+                          <h4 className="text-xs font-bold text-navy-950 uppercase tracking-wider">
+                            YOLO Object Detections
+                          </h4>
+                        </div>
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-white border border-slate-300 text-slate-700 font-mono">
+                          yolov8n.pt (CPU)
+                        </span>
+                      </div>
+
+                      {/* Loading State */}
+                      {isScanningVision && (
+                        <div className="p-3 rounded-lg bg-white border border-slate-200 text-center text-xs text-slate-500 space-y-1.5">
+                          <RefreshCw size={16} className="mx-auto text-civic-600 animate-spin" />
+                          <p>Analyzing photo with local YOLOv8 CPU microservice...</p>
+                        </div>
+                      )}
+
+                      {/* Error / Offline State */}
+                      {visionError && !isScanningVision && (
+                        <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 text-xs space-y-1">
+                          <div className="flex items-center gap-1.5 font-bold text-amber-800">
+                            <AlertTriangle size={14} />
+                            <span>Vision Service Offline</span>
+                          </div>
+                          <p className="text-[11px] text-amber-800/90 leading-relaxed">
+                            {visionError}
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Detections List */}
+                      {visionDetections && !isScanningVision && (
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="font-semibold text-slate-600">Objects Identified:</span>
+                            <span className="font-bold text-navy-950 font-mono">
+                              {visionDetections.total_detections} detected (≥25%)
+                            </span>
+                          </div>
+
+                          {visionDetections.detections.length > 0 ? (
+                            <div className="flex flex-wrap gap-1">
+                              {Object.entries(
+                                visionDetections.detections.reduce<Record<string, { count: number; maxConf: number }>>(
+                                  (acc, det) => {
+                                    const name = det.class_name;
+                                    if (!acc[name]) acc[name] = { count: 0, maxConf: 0 };
+                                    acc[name].count += 1;
+                                    acc[name].maxConf = Math.max(acc[name].maxConf, det.confidence);
+                                    return acc;
+                                  },
+                                  {}
+                                )
+                              ).map(([clsName, info]) => (
+                                <span
+                                  key={clsName}
+                                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-white border border-slate-200 text-slate-800 shadow-xs"
+                                >
+                                  <strong className="text-civic-700">{clsName}</strong>
+                                  <span className="text-[10px] text-slate-500">×{info.count}</span>
+                                  <span className="text-[10px] text-emerald-700 font-mono">
+                                    {Math.round(info.maxConf * 100)}%
+                                  </span>
+                                </span>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="text-xs text-slate-500 italic p-2 bg-white rounded border border-slate-200 text-center">
+                              No standard COCO objects detected in this photo.
+                            </p>
+                          )}
+
+                          <p className="text-[10px] text-slate-400 italic leading-snug">
+                            {visionDetections.model_limitations_notice ||
+                              'Note: YOLO detections are advisory and based on MS COCO classes.'}
+                          </p>
+                        </div>
+                      )}
+
+                      {!visionDetections && !isScanningVision && !visionError && (
+                        <div className="p-2 text-center text-xs text-slate-400 bg-white rounded border border-slate-200">
+                          Click &ldquo;Scan with YOLO&rdquo; to analyze this photo.
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
+
               </div>
 
               {/* RESOLUTION SECTION (If resolution information exists) */}

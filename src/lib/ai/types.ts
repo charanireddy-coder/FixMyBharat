@@ -1,4 +1,18 @@
-import { ComplaintCategory, ComplaintSeverity } from '@/types';
+import {
+  ComplaintCategory,
+  ComplaintSeverity,
+  VisionDetectionResponse,
+  VisionDetection,
+  VisionBoundingBox,
+  VisionImageDimensions,
+} from '@/types';
+
+export type {
+  VisionDetectionResponse,
+  VisionDetection,
+  VisionBoundingBox,
+  VisionImageDimensions,
+};
 
 export type AnalysisSource = 'demo' | 'rules' | 'model';
 
@@ -19,6 +33,7 @@ export interface AnalysisResult {
   modelName: string;
   matchedCategorySignals: string[];
   matchedSeveritySignals: string[];
+  visionDetections?: VisionDetectionResponse | null;
 }
 
 export interface ComplaintAnalyzer {
@@ -35,6 +50,7 @@ export interface StoredAIAnalysis {
   explanation: string | null;
   analysis_source: string;
   created_at: string;
+  vision_result?: VisionDetectionResponse | null;
 }
 
 // ----------------------------------------------------
