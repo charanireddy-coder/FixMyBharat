@@ -6,6 +6,7 @@ export interface TextareaProps extends React.TextareaHTMLAttributes<HTMLTextArea
   error?: string;
   hint?: string;
   required?: boolean;
+  showCount?: boolean;
 }
 
 export const Textarea: React.FC<TextareaProps> = ({
@@ -13,27 +14,46 @@ export const Textarea: React.FC<TextareaProps> = ({
   error,
   hint,
   required,
+  showCount,
   className,
   id,
   rows = 4,
+  maxLength,
+  value,
   ...props
 }) => {
   const textareaId = id || (label ? label.toLowerCase().replace(/\s+/g, '-') : undefined);
+  const currentLength = typeof value === 'string' ? value.length : 0;
 
   return (
     <div className="flex flex-col gap-1.5 w-full">
       {label && (
-        <label
-          htmlFor={textareaId}
-          className="text-xs font-semibold uppercase tracking-wider text-slate-700 flex items-center justify-between"
-        >
-          <span>{label}</span>
-          {required && <span className="text-rose-600 font-bold ml-1">*</span>}
-        </label>
+        <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-slate-700">
+          <label htmlFor={textareaId} className="flex items-center gap-1 cursor-pointer">
+            <span>{label}</span>
+            {required && <span className="text-rose-600 font-bold">*</span>}
+          </label>
+          {(showCount || maxLength !== undefined) && (
+            <span
+              className={cn(
+                'text-[11px] font-mono font-medium transition-colors',
+                maxLength && currentLength >= maxLength
+                  ? 'text-rose-600 font-bold'
+                  : maxLength && currentLength >= maxLength * 0.9
+                  ? 'text-amber-600'
+                  : 'text-slate-400'
+              )}
+            >
+              {currentLength} {maxLength ? `/ ${maxLength}` : 'chars'}
+            </span>
+          )}
+        </div>
       )}
       <textarea
         id={textareaId}
         rows={rows}
+        maxLength={maxLength}
+        value={value}
         className={cn(
           'w-full px-3.5 py-2.5 text-sm rounded-lg border bg-white text-slate-900 placeholder:text-slate-400',
           'transition-all duration-150 outline-none resize-y',

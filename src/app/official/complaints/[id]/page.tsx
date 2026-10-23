@@ -28,6 +28,13 @@ import {
   Eye,
   EyeOff,
   ScanLine,
+  Camera,
+  Compass,
+  Crosshair,
+  ShieldAlert,
+  Ban,
+  UserCheck,
+  XCircle,
 } from 'lucide-react';
 
 import {
@@ -40,6 +47,12 @@ import {
   triggerRelatedReportsAction,
   markRelatedReportReviewedAction,
 } from '@/app/actions/related';
+import {
+  blockUserAction,
+  unblockUserAction,
+  fetchUserModerationDetailsAction,
+  UserModerationProfile,
+} from '@/app/actions/moderation';
 
 import { StoredAIAnalysis, JoinedRelatedReport } from '@/lib/ai/types';
 import { scoreToSeverityLevel } from '@/lib/ai/rules';
@@ -69,6 +82,7 @@ import {
   VisionDetectionResponse,
 } from '@/types';
 import { getCategoryLabel, formatComplaintDate } from '@/lib/complaints';
+import { comparePhotoLocation, formatExifTimestamp } from '@/lib/exif';
 import { cn } from '@/lib/utils';
 
 interface PageProps {
@@ -142,6 +156,12 @@ function OfficialComplaintDetailContent({ params }: PageProps) {
   const [visionError, setVisionError] = useState<string | null>(null);
   const [showBoundingBoxes, setShowBoundingBoxes] = useState(true);
 
+  // User Moderation & Spam Control state
+  const [citizenModeration, setCitizenModeration] = useState<UserModerationProfile | null>(null);
+  const [isModeratingUser, setIsModeratingUser] = useState(false);
+  const [showBlockModal, setShowBlockModal] = useState(false);
+  const [blockReason, setBlockReason] = useState('Repeated spam / fraudulent civic complaint submissions');
+  const [moderationFeedback, setModerationFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // Role Access Control: Only official and admin
   useEffect(() => {
@@ -181,6 +201,15 @@ function OfficialComplaintDetailContent({ params }: PageProps) {
           setSelectedOfficialId(item.assigned_to || '');
           setResolutionNotes(item.resolution_notes || '');
           setIsLoading(false); // Core complaint data is ready to display immediately!
+
+          // Fetch citizen reporting moderation & spam stats non-blockingly
+          if (item.user_id) {
+            fetchUserModerationDetailsAction(item.user_id).then((modRes) => {
+              if (isMounted && modRes.success && modRes.profile) {
+                setCitizenModeration(modRes.profile);
+              }
+            }).catch((err) => console.warn('Moderation fetch notice:', err));
+          }
 
           // 2. Fetch auxiliary department and staff data non-blockingly
           try {
@@ -534,6 +563,71 @@ function OfficialComplaintDetailContent({ params }: PageProps) {
         type: 'error',
         text: res.error || 'Failed to add update.',
       });
+    }
+  };
+
+  const handleBlockCitizen = async () => {
+    if (!complaint?.user_id) return;
+    setIsModeratingUser(true);
+    setModerationFeedback(null);
+    try {
+      const res = await blockUserAction(complaint.user_id, blockReason);
+      if (res.success) {
+        setModerationFeedback({ type: 'success', text: 'Citizen user account has been suspended from reporting.' });
+        setShowBlockModal(false);
+        const updated = await fetchUserModerationDetailsAction(complaint.user_id);
+        if (updated.success && updated.profile) {
+          setCitizenModeration(updated.profile);
+          if (complaint.citizen_profile) {
+            setComplaint({
+              ...complaint,
+              citizen_profile: {
+                ...complaint.citizen_profile,
+                is_blocked: true,
+                blocked_reason: blockReason,
+              },
+            });
+          }
+        }
+      } else {
+        setModerationFeedback({ type: 'error', text: res.error || 'Failed to block user' });
+      }
+    } catch {
+      setModerationFeedback({ type: 'error', text: 'An unexpected error occurred while moderating user' });
+    } finally {
+      setIsModeratingUser(false);
+    }
+  };
+
+  const handleUnblockCitizen = async () => {
+    if (!complaint?.user_id) return;
+    setIsModeratingUser(true);
+    setModerationFeedback(null);
+    try {
+      const res = await unblockUserAction(complaint.user_id);
+      if (res.success) {
+        setModerationFeedback({ type: 'success', text: 'Citizen reporting privileges restored.' });
+        const updated = await fetchUserModerationDetailsAction(complaint.user_id);
+        if (updated.success && updated.profile) {
+          setCitizenModeration(updated.profile);
+          if (complaint.citizen_profile) {
+            setComplaint({
+              ...complaint,
+              citizen_profile: {
+                ...complaint.citizen_profile,
+                is_blocked: false,
+                blocked_reason: null,
+              },
+            });
+          }
+        }
+      } else {
+        setModerationFeedback({ type: 'error', text: res.error || 'Failed to unblock user' });
+      }
+    } catch {
+      setModerationFeedback({ type: 'error', text: 'An unexpected error occurred while unblocking user' });
+    } finally {
+      setIsModeratingUser(false);
     }
   };
 
@@ -1301,6 +1395,127 @@ function OfficialComplaintDetailContent({ params }: PageProps) {
                           </div>
                         )}
                       </div>
+
+                      {/* Photo Forensic & Identification Metadata Panel */}
+                      {complaint.photo_metadata && (
+                        <div className="p-4 rounded-xl bg-navy-900/60 border border-navy-800 space-y-4">
+                          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-navy-800/80 pb-3">
+                            <div className="flex items-center gap-2">
+                              <Camera size={16} className="text-civic-400" />
+                              <h3 className="text-xs font-bold text-white uppercase tracking-wider">
+                                Photo Identification & Metadata Forensics
+                              </h3>
+                            </div>
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-navy-950 border border-navy-700 text-slate-300">
+                              {complaint.photo_metadata.exif?.hasGps ? '📍 EXIF GPS Verified' : 'Camera Attributes Extracted'}
+                            </span>
+                          </div>
+
+                          {/* Location Verification & Geofence Comparison */}
+                          {(() => {
+                            const comp = comparePhotoLocation(
+                              complaint.photo_metadata.exif?.latitude,
+                              complaint.photo_metadata.exif?.longitude,
+                              complaint.latitude,
+                              complaint.longitude
+                            );
+
+                            return (
+                              <div
+                                className={cn(
+                                  'p-3 rounded-lg border text-xs flex items-start gap-2.5',
+                                  comp.status === 'verified_match'
+                                    ? 'bg-emerald-950/50 border-emerald-800/80 text-emerald-200'
+                                    : comp.status === 'nearby'
+                                    ? 'bg-sky-950/50 border-sky-800/80 text-sky-200'
+                                    : comp.status === 'discrepancy'
+                                    ? 'bg-amber-950/60 border-amber-800/80 text-amber-200'
+                                    : 'bg-navy-950/60 border-navy-800 text-slate-300'
+                                )}
+                              >
+                                {comp.status === 'verified_match' ? (
+                                  <ShieldCheck size={16} className="text-emerald-400 shrink-0 mt-0.5" />
+                                ) : comp.status === 'discrepancy' ? (
+                                  <AlertTriangle size={16} className="text-amber-400 shrink-0 mt-0.5" />
+                                ) : (
+                                  <Compass size={16} className="text-slate-400 shrink-0 mt-0.5" />
+                                )}
+                                <div>
+                                  <p className="font-bold text-xs">
+                                    {comp.status === 'verified_match'
+                                      ? 'Geofence Verified (On-Site Capture)'
+                                      : comp.status === 'nearby'
+                                      ? 'Geographic Proximity Confirmed'
+                                      : comp.status === 'discrepancy'
+                                      ? 'Geographic Discrepancy Flag'
+                                      : 'Photo Location Telemetry'}
+                                  </p>
+                                  <p className="text-[11px] opacity-90 mt-0.5">{comp.message}</p>
+                                </div>
+                              </div>
+                            );
+                          })()}
+
+                          {/* Technical EXIF & File Details Grid */}
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs">
+                            {/* Device & Camera Model */}
+                            <div className="p-3 rounded-lg bg-navy-950 border border-navy-800/80 space-y-1">
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                                Camera / Hardware
+                              </span>
+                              <span className="font-semibold text-white block">
+                                {complaint.photo_metadata.exif?.cameraMake || complaint.photo_metadata.exif?.cameraModel
+                                  ? `${complaint.photo_metadata.exif.cameraMake || ''} ${complaint.photo_metadata.exif.cameraModel || ''}`.trim()
+                                  : 'Not specified in header'}
+                              </span>
+                            </div>
+
+                            {/* Original Capture Date */}
+                            <div className="p-3 rounded-lg bg-navy-950 border border-navy-800/80 space-y-1">
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                                Original Capture Date
+                              </span>
+                              <span className="font-semibold text-white block">
+                                {complaint.photo_metadata.exif?.capturedAt
+                                  ? formatExifTimestamp(complaint.photo_metadata.exif.capturedAt)
+                                  : 'Not recorded in EXIF'}
+                              </span>
+                            </div>
+
+                            {/* Camera Coordinates */}
+                            <div className="p-3 rounded-lg bg-navy-950 border border-navy-800/80 space-y-1">
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                                Camera GPS
+                              </span>
+                              <span className="font-mono text-[11px] font-semibold text-slate-300 block">
+                                {complaint.photo_metadata.exif?.hasGps
+                                  ? `${complaint.photo_metadata.exif.latitude}°, ${complaint.photo_metadata.exif.longitude}°`
+                                  : 'No GPS tag in photo'}
+                              </span>
+                            </div>
+
+                            {/* File Specs */}
+                            {complaint.photo_metadata.fileInfo && (
+                              <div className="p-3 rounded-lg bg-navy-950 border border-navy-800/80 space-y-1 sm:col-span-2 lg:col-span-3 flex flex-wrap items-center justify-between gap-2">
+                                <span className="text-[11px] text-slate-400">
+                                  File: <strong className="text-white">{complaint.photo_metadata.fileInfo.name || 'photo.jpg'}</strong>
+                                  {complaint.photo_metadata.fileInfo.size && (
+                                    <> • {(complaint.photo_metadata.fileInfo.size / (1024 * 1024)).toFixed(2)} MB</>
+                                  )}
+                                  {complaint.photo_metadata.fileInfo.mimeType && (
+                                    <> • {complaint.photo_metadata.fileInfo.mimeType}</>
+                                  )}
+                                </span>
+                                {complaint.photo_metadata.vision && (
+                                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800">
+                                    Pre-screened: {complaint.photo_metadata.vision.approved ? 'Approved' : 'Unverified'} ({complaint.photo_metadata.vision.model})
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ) : complaint.image_url ? (
                     <div className="p-8 rounded-xl bg-navy-900/60 border border-navy-800 text-center text-xs text-slate-400 space-y-2">
@@ -1480,6 +1695,213 @@ function OfficialComplaintDetailContent({ params }: PageProps) {
 
             {/* Right Column (Action Controls) - 5 cols */}
             <div className="lg:col-span-5 space-y-6">
+              {/* CITIZEN REPORTER & ANTI-SPAM MODERATION CARD */}
+              <Card className="border-navy-800 bg-navy-950 shadow-md">
+                <CardHeader className="py-4 px-6 border-b border-navy-800 bg-navy-900/40 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <User size={15} className="text-civic-400" />
+                    <h2 className="text-sm font-bold text-white uppercase tracking-wider">
+                      Citizen Reporter & Moderation
+                    </h2>
+                  </div>
+                  {complaint.citizen_profile?.is_blocked ? (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[10px] font-bold bg-rose-950 text-rose-300 border border-rose-800">
+                      <Ban size={10} /> Blocked
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[10px] font-bold bg-emerald-950 text-emerald-300 border border-emerald-800">
+                      <UserCheck size={10} /> Active Citizen
+                    </span>
+                  )}
+                </CardHeader>
+                <CardBody className="p-6 space-y-4">
+                  {moderationFeedback && (
+                    <div
+                      className={cn(
+                        'p-2.5 rounded-lg text-xs font-medium',
+                        moderationFeedback.type === 'success'
+                          ? 'bg-emerald-950/80 text-emerald-200 border border-emerald-800'
+                          : 'bg-red-950/80 text-red-200 border border-red-800'
+                      )}
+                    >
+                      {moderationFeedback.text}
+                    </div>
+                  )}
+
+                  {/* Reporter Info Row */}
+                  <div className="flex items-start justify-between gap-3 p-3.5 rounded-xl bg-navy-900/60 border border-navy-800 text-xs">
+                    <div className="space-y-0.5 min-w-0">
+                      <span className="font-bold text-sm text-white block truncate">
+                        {complaint.citizen_profile?.full_name || 'Registered Citizen'}
+                      </span>
+                      <span className="text-[11px] text-slate-400 block truncate">
+                        {citizenModeration?.email || 'Authenticated User'}
+                      </span>
+                      {complaint.citizen_profile?.phone && (
+                        <span className="text-[11px] text-slate-400 block">
+                          Phone: {complaint.citizen_profile.phone}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="text-right shrink-0">
+                      <span className="text-[10px] uppercase font-bold text-slate-500 block">Role</span>
+                      <span className="text-xs font-mono font-semibold text-slate-300 capitalize">
+                        {complaint.citizen_profile?.role || 'citizen'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Anti-Spam Telemetry Indicators */}
+                  <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                    <div className="p-2.5 rounded-lg bg-navy-900/40 border border-navy-800/80">
+                      <span className="text-[10px] uppercase font-bold text-slate-400 block">Total Reports</span>
+                      <span className="text-sm font-black text-white font-mono">
+                        {citizenModeration?.total_complaints ?? 1}
+                      </span>
+                    </div>
+
+                    <div className="p-2.5 rounded-lg bg-navy-900/40 border border-navy-800/80">
+                      <span className="text-[10px] uppercase font-bold text-slate-400 block">Rejected</span>
+                      <span className="text-sm font-black text-rose-400 font-mono">
+                        {citizenModeration?.rejected_complaints ?? 0}
+                      </span>
+                    </div>
+
+                    <div className="p-2.5 rounded-lg bg-navy-900/40 border border-navy-800/80">
+                      <span className="text-[10px] uppercase font-bold text-slate-400 block">Spam Risk</span>
+                      <span
+                        className={cn(
+                          'text-sm font-black font-mono',
+                          (citizenModeration?.spam_score ?? 0) >= 40
+                            ? 'text-amber-400'
+                            : 'text-emerald-400'
+                        )}
+                      >
+                        {citizenModeration?.spam_score ?? 0}%
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Suspended User Alert & Unblock Action */}
+                  {complaint.citizen_profile?.is_blocked ? (
+                    <div className="p-3.5 rounded-xl bg-rose-950/60 border border-rose-800 space-y-2.5 text-xs">
+                      <div className="flex items-center gap-1.5 font-bold text-rose-300">
+                        <ShieldAlert size={14} />
+                        <span>Reporting Privileges Suspended</span>
+                      </div>
+                      <p className="text-[11px] text-rose-200/90 leading-relaxed">
+                        Reason: &ldquo;{complaint.citizen_profile.blocked_reason || 'Repeated portal spam'}&rdquo;
+                      </p>
+                      <Button
+                        type="button"
+                        variant="outline-dark"
+                        size="sm"
+                        onClick={handleUnblockCitizen}
+                        disabled={isModeratingUser}
+                        className="w-full text-xs border-rose-700/80 text-rose-200 hover:bg-rose-900/50"
+                        leftIcon={<UserCheck size={13} />}
+                      >
+                        {isModeratingUser ? 'Updating...' : 'Unblock Citizen Reporting Access'}
+                      </Button>
+                    </div>
+                  ) : (
+                    /* Active User: Block Action */
+                    <div className="space-y-2 pt-1">
+                      {!showBlockModal ? (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setShowBlockModal(true)}
+                          className="w-full text-xs text-rose-400 hover:text-rose-300 hover:bg-rose-950/40 border border-rose-900/40"
+                          leftIcon={<Ban size={13} />}
+                        >
+                          Block Citizen for Spam / Policy Violations
+                        </Button>
+                      ) : (
+                        <div className="p-3.5 rounded-xl bg-rose-950/40 border border-rose-800 space-y-3 text-xs animate-in fade-in duration-200">
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-rose-200 flex items-center gap-1.5">
+                              <ShieldAlert size={13} />
+                              Confirm User Suspension
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setShowBlockModal(false)}
+                              className="text-slate-400 hover:text-white"
+                            >
+                              <XCircle size={14} />
+                            </button>
+                          </div>
+
+                          <div className="space-y-1.5">
+                            <label className="text-[10px] font-bold uppercase tracking-wider text-slate-300 block">
+                              Reason for Blocking
+                            </label>
+
+                            {/* Quick Presets */}
+                            <div className="flex flex-wrap gap-1">
+                              {[
+                                'Spamming with duplicate reports',
+                                'Uploading fake / non-civic photos',
+                                'Abusive or fraudulent submissions',
+                              ].map((preset) => (
+                                <button
+                                  key={preset}
+                                  type="button"
+                                  onClick={() => setBlockReason(preset)}
+                                  className={cn(
+                                    'px-2 py-0.5 rounded text-[10px] transition-colors',
+                                    blockReason === preset
+                                      ? 'bg-rose-900 text-rose-200 border border-rose-700 font-bold'
+                                      : 'bg-navy-900 text-slate-400 border border-navy-800 hover:text-slate-200'
+                                  )}
+                                >
+                                  {preset}
+                                </button>
+                              ))}
+                            </div>
+
+                            <textarea
+                              rows={2}
+                              value={blockReason}
+                              onChange={(e) => setBlockReason(e.target.value)}
+                              placeholder="Enter reason for suspension..."
+                              className="w-full p-2 rounded-lg bg-navy-900 border border-navy-800 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-rose-500 resize-none mt-1"
+                            />
+                          </div>
+
+                          <div className="flex items-center justify-end gap-2 pt-1">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setShowBlockModal(false)}
+                              disabled={isModeratingUser}
+                              className="text-xs text-slate-400 hover:text-white"
+                            >
+                              Cancel
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="danger"
+                              size="sm"
+                              onClick={handleBlockCitizen}
+                              disabled={isModeratingUser || !blockReason.trim()}
+                              className="text-xs bg-rose-700 hover:bg-rose-800 text-white"
+                              leftIcon={<Ban size={12} />}
+                            >
+                              {isModeratingUser ? 'Suspending...' : 'Confirm Block'}
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </CardBody>
+              </Card>
+
               {/* STATUS WORKFLOW CARD */}
               <Card className="border-navy-800 bg-navy-950 shadow-md">
                 <CardHeader className="py-4 px-6 border-b border-navy-800 bg-navy-900/40">

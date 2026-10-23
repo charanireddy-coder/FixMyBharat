@@ -21,6 +21,8 @@ import {
   EyeOff,
   RefreshCw,
   ScanLine,
+  Camera,
+  Compass,
 } from 'lucide-react';
 import { runVisionDetectionAction } from '@/app/actions/ai';
 import { CitizenNav } from '@/components/layout/CitizenNav';
@@ -40,6 +42,7 @@ import {
 } from '@/types';
 import { getCategoryLabel, formatComplaintDate } from '@/lib/complaints';
 import { getSignedPhotoUrl } from '@/lib/storage';
+import { formatExifTimestamp } from '@/lib/exif';
 import { cn } from '@/lib/utils';
 
 
@@ -610,6 +613,55 @@ function CitizenReportDetailContent({ params }: PageProps) {
                           Click &ldquo;Scan with YOLO&rdquo; to analyze this photo.
                         </div>
                       )}
+                    </div>
+                  )}
+
+                  {/* Photo Identification & Metadata Card */}
+                  {complaint.photo_metadata && (
+                    <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-2.5">
+                      <div className="flex items-center justify-between border-b border-slate-200/80 pb-2">
+                        <div className="flex items-center gap-1.5">
+                          <Camera size={14} className="text-civic-600" />
+                          <h4 className="text-xs font-bold text-navy-950 uppercase tracking-wider">
+                            Photo Identification Metadata
+                          </h4>
+                        </div>
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-white border border-slate-300 text-slate-700">
+                          {complaint.photo_metadata.exif?.hasGps ? '📍 EXIF GPS Verified' : 'Standard Metadata'}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                        <div className="p-2 rounded-lg bg-white border border-slate-200/80">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase block">Camera / Device</span>
+                          <span className="font-semibold text-slate-800">
+                            {complaint.photo_metadata.exif?.cameraMake || complaint.photo_metadata.exif?.cameraModel
+                              ? `${complaint.photo_metadata.exif.cameraMake || ''} ${complaint.photo_metadata.exif.cameraModel || ''}`.trim()
+                              : 'Digital Camera Sensor'}
+                          </span>
+                        </div>
+
+                        <div className="p-2 rounded-lg bg-white border border-slate-200/80">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase block">Capture Timestamp</span>
+                          <span className="font-semibold text-slate-800">
+                            {complaint.photo_metadata.exif?.capturedAt
+                              ? formatExifTimestamp(complaint.photo_metadata.exif.capturedAt)
+                              : formatComplaintDate(complaint.created_at)}
+                          </span>
+                        </div>
+
+                        {complaint.photo_metadata.exif?.hasGps && (
+                          <div className="p-2 rounded-lg bg-emerald-50/70 border border-emerald-200 sm:col-span-2">
+                            <span className="text-[10px] font-bold text-emerald-800 uppercase block">
+                              📍 Embedded Camera GPS Coordinates
+                            </span>
+                            <span className="font-mono text-xs font-bold text-emerald-950">
+                              {complaint.photo_metadata.exif.latitude}°, {complaint.photo_metadata.exif.longitude}°
+                              {complaint.photo_metadata.exif.altitude ? ` (Alt: ${complaint.photo_metadata.exif.altitude}m)` : ''}
+                            </span>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>

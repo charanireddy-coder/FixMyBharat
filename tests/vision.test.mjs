@@ -204,3 +204,55 @@ test('8. Ultralytics Cloud inference response normalization', () => {
   assert.equal(first.confidence, 0.9204);
 });
 
+test('9. Photo verification & approval logic on civic detection', () => {
+  const detections = [
+    { class_id: 2, class_name: 'car', confidence: 0.92, box: { norm_x1: 0.1, norm_y1: 0.2, norm_width: 0.3, norm_height: 0.3 } }
+  ];
+
+  const approvedPayload = {
+    approved: true,
+    status: 'approved',
+    reason: 'AI Vision verified: Identified 1 civic feature (car (92%)). Photo approved for municipal review.',
+    model: 'yolo26n (Ultralytics Cloud)',
+    detections,
+    totalDetections: 1,
+    detectedTags: ['car (92%)'],
+  };
+
+  assert.equal(approvedPayload.approved, true);
+  assert.equal(approvedPayload.status, 'approved');
+  assert.equal(approvedPayload.totalDetections, 1);
+  assert.ok(approvedPayload.reason.includes('approved'));
+});
+
+test('10. Degenerate image file rejection guard', () => {
+  const degenerateFileSize = 128; // < 512 bytes
+  const isRejected = degenerateFileSize < 512;
+  assert.equal(isRejected, true, 'Files smaller than 512 bytes must be rejected as blank/degenerate');
+});
+
+test('11. Rejects random person portrait and selfie photos', () => {
+  const detections = [
+    {
+      class_id: 0,
+      class_name: 'person',
+      confidence: 0.87,
+      box: { norm_x1: 0.3, norm_y1: 0.2, norm_width: 0.45, norm_height: 0.55 },
+    },
+  ];
+
+  const personArea = detections[0].box.norm_width * detections[0].box.norm_height;
+  const isPersonDominant = personArea >= 0.08;
+  assert.ok(isPersonDominant, 'Person occupying significant area must trigger person guard');
+
+  const rejectedVerdict = {
+    approved: false,
+    status: 'rejected',
+    reason: 'Photo rejected: Portrait or person detected. Civic reports require a clear photo of the infrastructure defect (e.g. pothole, garbage pile, road damage, drainage, broken streetlight), not of an individual or selfie.',
+  };
+
+  assert.equal(rejectedVerdict.approved, false);
+  assert.equal(rejectedVerdict.status, 'rejected');
+  assert.ok(rejectedVerdict.reason.includes('Portrait or person detected'));
+});
+

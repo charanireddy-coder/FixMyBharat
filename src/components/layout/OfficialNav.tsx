@@ -37,6 +37,7 @@ export const OfficialNav: React.FC = () => {
     { href: '/official/analytics', label: 'Analytics', icon: BarChart3 },
     { href: '/official/map', label: 'Map', icon: Map },
     { href: '/official/departments', label: 'Departments', icon: Building2 },
+    { href: '/official/users', label: 'Moderation', icon: ShieldAlert },
     { href: '/official/profile', label: 'Profile', icon: User },
   ];
 

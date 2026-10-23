@@ -59,6 +59,10 @@ export interface UserProfile {
   department_id?: string;
   badge_number?: string;
   designation?: string;
+  is_blocked?: boolean;
+  blocked_reason?: string | null;
+  blocked_at?: string | null;
+  blocked_by?: string | null;
 }
 
 export type Profile = UserProfile;
@@ -128,6 +132,47 @@ export interface VisionDetectionResponse {
   total_detections: number;
   detections: VisionDetection[];
   model_limitations_notice?: string;
+}
+
+export interface PhotoExifData {
+  capturedAt?: string | null;
+  cameraMake?: string | null;
+  cameraModel?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  altitude?: number | null;
+  hasGps: boolean;
+  orientation?: number | null;
+}
+
+export interface StoredPhotoMetadata {
+  exif?: PhotoExifData | null;
+  vision?: {
+    model: string;
+    detections: VisionDetection[];
+    totalDetections: number;
+    detectedTags: string[];
+    approved: boolean;
+    reason: string;
+  } | null;
+  fileInfo?: {
+    name?: string;
+    size?: number;
+    mimeType?: string;
+    uploadedAt?: string;
+  };
+}
+
+export interface PhotoApprovalResult {
+  approved: boolean;
+  status: 'approved' | 'rejected';
+  reason: string;
+  model: string;
+  detections: VisionDetection[];
+  totalDetections: number;
+  imageDimensions?: VisionImageDimensions;
+  detectedTags: string[];
+  exif?: PhotoExifData | null;
 }
 
 
@@ -200,6 +245,7 @@ export interface Complaint {
   citizen_phone?: string;
   department_name?: string;
   photo_url?: string;
+  photo_metadata?: StoredPhotoMetadata | null;
 }
 
 export interface ComplaintFilterOptions {

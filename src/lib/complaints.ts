@@ -1,4 +1,4 @@
-import { ComplaintCategory, Complaint } from '@/types';
+import { ComplaintCategory, Complaint, StoredPhotoMetadata } from '@/types';
 import { createClient } from '@/lib/supabase/client';
 
 export const CATEGORY_OPTIONS: { value: ComplaintCategory; label: string }[] = [
@@ -52,6 +52,7 @@ export interface CreateComplaintInput {
   latitude?: number | null;
   longitude?: number | null;
   image_url?: string | null;
+  photo_metadata?: StoredPhotoMetadata | null;
 }
 
 /**
@@ -66,6 +67,23 @@ export async function createComplaint(
   try {
     const supabase = createClient();
 
+    // Guardrail: Prohibit blocked/suspended users from submitting complaints
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('is_blocked, blocked_reason')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (profile?.is_blocked) {
+      const reasonText = profile.blocked_reason
+        ? `Reason: ${profile.blocked_reason}`
+        : 'Reason: Repeated spam, fraudulent submissions, or policy violations.';
+      return {
+        complaint: null,
+        error: `Your reporting access has been suspended by administration. ${reasonText}`,
+      };
+    }
+
     const insertPayload = {
       user_id: userId,
       title: input.title.trim(),
@@ -75,6 +93,7 @@ export async function createComplaint(
       latitude: input.latitude ?? null,
       longitude: input.longitude ?? null,
       image_url: input.image_url ?? null,
+      photo_metadata: input.photo_metadata ?? null,
       status: 'submitted' as const,
       severity: 'medium' as const,
     };

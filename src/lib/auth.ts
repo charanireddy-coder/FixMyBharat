@@ -39,7 +39,7 @@ export async function getCurrentProfile(
   // Attempt to fetch profile from public.profiles
   let { data: profile, error: profileError } = await supabase
     .from('profiles')
-    .select('id, full_name, phone, role, created_at, updated_at')
+    .select('id, full_name, phone, role, is_blocked, blocked_reason, blocked_at, blocked_by, created_at, updated_at')
     .eq('id', user.id)
     .maybeSingle();
 
@@ -48,7 +48,7 @@ export async function getCurrentProfile(
     await new Promise((resolve) => setTimeout(resolve, 400));
     const retry = await supabase
       .from('profiles')
-      .select('id, full_name, phone, role, created_at, updated_at')
+      .select('id, full_name, phone, role, is_blocked, blocked_reason, blocked_at, blocked_by, created_at, updated_at')
       .eq('id', user.id)
       .maybeSingle();
     profile = retry.data;
